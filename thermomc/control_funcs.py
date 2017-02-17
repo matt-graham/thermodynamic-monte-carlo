@@ -22,7 +22,7 @@ class CircularControlFunction(object):
         )
 
     def log_jacobian_term(self, tmp_ctrl_var):
-        return 0
+        return 0.
 
 
 class ThresholdedCircularControlFunction(object):
@@ -55,7 +55,7 @@ class ThresholdedCircularControlFunction(object):
         )
 
     def log_jacobian_term(self, tmp_ctrl_var):
-        return 0
+        return 0.
 
 
 class SigmoidalControlFunction(object):
@@ -74,6 +74,5 @@ class SigmoidalControlFunction(object):
     def log_jacobian_term(self, tmp_ctrl_var):
         u = tmp_ctrl_var / self.scale
         return (
-            tt.log(tt.nnet.sigmoid(u)) + tt.log(1. - tt.nnet.sigmoid(u)) -
-            tt.log(self.scale)
+            tt.log(tt.nnet.sigmoid(u)) + tt.log(1. - tt.nnet.sigmoid(u))
         )
