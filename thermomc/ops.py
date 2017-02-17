@@ -43,14 +43,6 @@ class I1(UnaryScalarOp):
     def grad(self, inp, grads):
         raise NotImplementedError()
 
-    def c_code(self, node, name, inp, out, sub):
-        x, = inp
-        z, = out
-        if node.inputs[0].type in float_types:
-            return """%(z)s =
-                i1(%(x)s);""" % locals()
-        raise NotImplementedError('only floating point is implemented')
-
 i1_scalar = I1(upgrade_to_float, name='i1')
 i1 = construct_elemwise(
     'i1', 'Modified Bessel function of order 1', i1_scalar)
@@ -73,14 +65,6 @@ class I0(UnaryScalarOp):
         x, = inp
         gz, = grads
         return [gz * i1(x)]
-
-    def c_code(self, node, name, inp, out, sub):
-        x, = inp
-        z, = out
-        if node.inputs[0].type in float_types:
-            return """%(z)s =
-                i0(%(x)s);""" % locals()
-        raise NotImplementedError('only floating point is implemented')
 
 i0_scalar = I0(upgrade_to_float, name='i0')
 i0 = construct_elemwise(
