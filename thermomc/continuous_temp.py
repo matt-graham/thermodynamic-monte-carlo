@@ -106,37 +106,42 @@ class JointContinuousTemperingSampler(HamiltonianSampler):
        Carlo, 2016.
     """
 
-    def chain(self, pos_init, mom_init, phi_func, psi_func,
+    def chain(self, pos_init, tmp_ctrl_init, mom_init, phi_func, psi_func,
               control_func, n_sample, hmc_params):
         # Define energy function
-        def energy_func(pos, return_components=False):
-            u, x = pos[:, 0], pos[:, 1:]
-            inv_temp = control_func.inv_temp_func(u)
-            phi = phi_func(x)
-            psi = psi_func(x)
+        def energy_func(aug_pos, return_components=False):
+            tmp_ctrl, pos = aug_pos[:, 0], aug_pos[:, 1:]
+            inv_temp = control_func.inv_temp_func(tmp_ctrl)
+            phi = phi_func(pos)
+            psi = psi_func(pos)
             energy = (
                 inv_temp * phi + (1 - inv_temp) * psi -
-                control_func.log_jacobian_term(u)
+                control_func.log_jacobian_term(tmp_ctrl)
             )
             if return_components:
                 return energy, [phi, psi]
             else:
                 return energy
+        aug_pos_init = tt.concatenate([tmp_ctrl_init[:, None], pos_init], 1)
         if mom_init is None:
-            mom_init = self.srng.normal(size=pos_init.shape)
-        energy_init, [phi_init, psi_init] = energy_func(pos_init, True)
-        (pos_samples, _, _, _, _, probs_0, probs_1, accepts), updates = (
-            th.scan(
-                fn=lambda pos, mom, energy, phi, psi: self.transition(
-                    pos, mom, energy, phi, psi, energy_func, control_func,
-                    hmc_params),
-                outputs_info=[
-                    pos_init, mom_init, energy_init, phi_init, psi_init,
-                    None, None, None],
-                n_steps=n_sample
-            )
+            mom_init = self.srng.normal(size=aug_pos_init.shape)
+        energy_init, [phi_init, psi_init] = energy_func(
+            aug_pos_init, True)
+        (aug_pos_samples, _, _, _, _,
+         probs_0, probs_1, accepts), updates = th.scan(
+            fn=lambda aug_pos, mom, energy, phi, psi: self.transition(
+                aug_pos, mom, energy, phi, psi, energy_func, control_func,
+                hmc_params),
+            outputs_info=[
+                aug_pos_init, mom_init, energy_init, phi_init, psi_init,
+                None, None, None],
+            n_steps=n_sample
         )
-        return pos_samples, probs_0, probs_1, accepts.mean(0), updates
+        tmp_ctrl_samples = aug_pos_samples[:, :, 0]
+        inv_temp_samples = control_func.inv_temp_func(tmp_ctrl_samples)
+        pos_samples = aug_pos_samples[:, :, 1:]
+        return (pos_samples, tmp_ctrl_samples, inv_temp_samples,
+                probs_0, probs_1, accepts.mean(0), updates)
 
     def transition(self, pos, mom, energy, phi, psi, energy_func,
                    control_func, hmc_params):
