@@ -172,8 +172,11 @@ class HamiltonianSampler(object):
         else:
             energy_prop = energy_func(pos_prop)
         hamiltonian_prop = energy_prop + 0.5 * (mom_prop**2).sum(-1)
+        k_energy_prop = 0.5 * (mom_prop**2).sum(-1)
+        accept_prob = tt.exp(hamiltonian_init - hamiltonian_prop)
+        accept_prob = tt.switch(tt.le(accept_prob, 1), accept_prob, 1)
         uni_rnd = self.srng.uniform(energy_prop.shape)
-        accept = tt.le(uni_rnd, tt.exp(hamiltonian_init - hamiltonian_prop))
+        accept = tt.le(uni_rnd, accept_prob)
         pos_next = tt.switch(accept[:, None], pos_prop, pos_init)
         mom_next = tt.switch(accept[:, None], mom_prop, mom_init)
         energy_next = tt.switch(accept, energy_prop, energy_init)
@@ -191,14 +194,10 @@ class HamiltonianSampler(object):
             (1. - mom_resample_coeff**2)**0.5 * mom_next
         )
         if not return_energy_components:
-            return [
-                pos_next, mom_next, energy_init, energy_next,
-                tt.cast(accept, th.config.floatX)
-            ]
+            return pos_next, mom_next, energy_init, energy_next, accept_prob
         else:
             return [
-                pos_next, mom_next, energy_init, energy_next,
-                tt.cast(accept, th.config.floatX)
+                pos_next, mom_next, energy_init, energy_next, accept_prob
             ] + comp_init + comp_next
 
     def hmc_chain(self, pos_init, mom_init, energy_func, n_sample,
@@ -239,8 +238,9 @@ class HamiltonianSampler(object):
             entry a binary tensor specifying whether the Metropolis-Hastings
             update for each chain where accepted.
         """
-        n_batch = pos_init.shape[0]
         energy_init = energy_func(pos_init)
+        if mom_init is None:
+            mom_init = self.srng.normal(size=pos_init.shape)
         (pos_samples, mom_samples, _, _, accept_seq), updates = th.scan(
             fn=lambda pos, mom, e_init: self.hmc_transition(
                 pos, mom, energy_func, dt, n_step, mom_resample_coeff,
@@ -249,3 +249,133 @@ class HamiltonianSampler(object):
             n_steps=n_sample
         )
         return pos_samples, mom_samples, accept_seq.mean(0), updates
+
+    def adaptive_hmc_transition(self, step, pos, mom, dt, log_dt_smooth,
+                                adapt_stat, energy, energy_func, n_step,
+                                mom_resample_coeff, chain_group_size,
+                                target_accept, adapt_shrinkage_tgt,
+                                adapt_shrinkage_amt, adapt_step_exponent,
+                                adapt_offset):
+        """Dual averaging based adaptive step-size HMC transition.
+
+        Inner loop of algorithm 5 in [1].
+
+        References:
+
+        1. Hoffman, M.D. and Gelman, A. The No-U-Turn Sampler: Adaptively
+           Settings Path Lengths in Hamiltonian Monte Carlo, 2014.
+        """
+        pos_next, mom_next, _, energy_next, accept = self.hmc_transition(
+            pos, mom, energy_func, dt.repeat(chain_group_size, 0)[:, None],
+            n_step, mom_resample_coeff, energy, None, False
+        )
+        beta = 1. / (adapt_offset + step)
+        adapt_stat = (
+            (1 - beta) * adapt_stat + beta *
+            (target_accept - accept.reshape((-1, chain_group_size)).mean(-1))
+        )
+        log_dt = (
+            adapt_shrinkage_tgt -
+            adapt_stat * step**0.5 / adapt_shrinkage_amt
+        )
+        rho = 1. / step**adapt_step_exponent
+        log_dt_smooth = (1 - rho) * log_dt_smooth + rho * log_dt
+        return (
+            pos_next, mom_next, tt.exp(log_dt), log_dt_smooth, adapt_stat,
+            energy_next, accept
+        )
+
+    def adaptive_hmc_chain(self, pos_init, mom_init, energy_func, n_sample,
+                           n_step=10, mom_resample_coeff=1, chain_group_size=1,
+                           target_accept=0.65, adapt_shrinkage_tgt=None,
+                           adapt_shrinkage_amt=0.05, adapt_step_exponent=0.75,
+                           adapt_offset=10, max_dt_init_steps=20,
+                           log_dt_smooth_init=0., adapt_stat_init=0.):
+        """Dual averaging based adaptive step-size HMC chain.
+
+        Algorithm 5 in [1].
+
+        References:
+
+        1. Hoffman, M.D. and Gelman, A. The No-U-Turn Sampler: Adaptively
+           Settings Path Lengths in Hamiltonian Monte Carlo, 2014.
+        """
+        if mom_init is None:
+            mom_init = self.srng.normal(size=pos_init.shape)
+        dt_init, energy_init = self.find_reasonable_dt(
+            pos_init, mom_init, energy_func, max_dt_init_steps)
+        dt_init = dt_init.reshape((-1, chain_group_size)).mean(-1)
+        adapt_stat_init = adapt_stat_init * tt.ones_like(dt_init)
+        log_dt_smooth_init = log_dt_smooth_init * tt.ones_like(dt_init)
+        if adapt_shrinkage_tgt is None:
+            adapt_shrinkage_tgt = tt.log(10. * dt_init)
+        (pos_samples, mom_samples, dt_seq, log_dt_smooth_seq, adapt_stat_seq,
+         energy_seq, accept_seq), updates = th.scan(
+            fn=lambda step, pos, mom, dt, log_dt_smooth, adapt_stat, energy: (
+                self.adaptive_hmc_transition(
+                    step, pos, mom, dt, log_dt_smooth, adapt_stat, energy,
+                    energy_func, n_step, mom_resample_coeff, chain_group_size,
+                    target_accept, adapt_shrinkage_tgt, adapt_shrinkage_amt,
+                    adapt_step_exponent, adapt_offset
+                )
+            ),
+            sequences=[tt.arange(1, n_sample + 1)],
+            outputs_info=[
+                pos_init, mom_init, dt_init, log_dt_smooth_init,
+                adapt_stat_init, energy_init, None
+            ],
+        )
+        dt_final = tt.exp(log_dt_smooth_seq[-1]).repeat(chain_group_size, 0)
+        return pos_samples[-1], mom_samples[-1], dt_final, accept_seq, updates
+
+    def find_reasonable_dt(self, pos, mom, energy_func, max_steps=20):
+        """Heuristic to find reasonable initial integrator step size.
+
+        Algorithm 4 in [1].
+
+        References:
+
+        1. Hoffman, M.D. and Gelman, A. The No-U-Turn Sampler: Adaptively
+           Settings Path Lengths in Hamiltonian Monte Carlo, 2014.
+        """
+        if mom is None:
+            mom = self.srng.normal(size=pos.shape)
+        k_energy = 0.5 * (mom**2).sum(-1)
+        energy = energy_func(pos)
+        energy_grad = tt.grad(energy.sum(), pos)
+
+        def leapfrog_accept_prob(dt, pos, mom, energy, energy_grad, k_energy):
+            mom_h = mom - 0.5 * dt[:, None] * energy_grad
+            pos_n = pos + dt[:, None] * mom_h
+            energy_n = energy_func(pos_n)
+            mom_n = mom_h - 0.5 * dt[:, None] * tt.grad(energy_n.sum(), pos_n)
+            return tt.exp(
+                energy - energy_n + k_energy - 0.5 * (mom_n**2).sum(-1)
+            )
+
+        dt_init = tt.ones((pos.shape[0],))
+        accept_prob_init = leapfrog_accept_prob(
+            dt_init, pos, mom, energy, energy_grad, k_energy)
+        sign = 2 * tt.gt(accept_prob_init, 0.5) - 1
+
+        def adapt_step(dt, accept_prob, pos, mom, energy, energy_grad,
+                       k_energy):
+            dt = tt.switch(tt.gt(accept_prob**sign, 2.**(-sign)),
+                           (2.**sign) * dt, dt)
+            accept_prob = leapfrog_accept_prob(
+                dt, pos, mom, energy, energy_grad, k_energy)
+            return (dt, accept_prob), th.scan_module.until(
+                tt.all(tt.le(accept_prob**sign, 2.**(-sign))))
+
+        (dt_seq, accept_prob_seq), _ = th.scan(
+            fn=adapt_step, outputs_info=[dt_init, accept_prob_init],
+            non_sequences=[pos, mom, energy, energy_grad, k_energy],
+            n_steps=max_steps
+        )
+        # For symmetry, double step sizes which crossed 0.5 accept probability
+        # threshold in downward direction to get first power of 2 which gives
+        # accept probability > 0.5. This is slightly different from the
+        # Hoffman and Gelman scheme.
+        dt = tt.switch(tt.gt(accept_prob_seq[-1], 0.5),
+                       dt_seq[-1], 0.5 * dt_seq[-1])
+        return dt, energy
