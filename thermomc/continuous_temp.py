@@ -155,8 +155,6 @@ class JointContinuousTemperingSampler(HamiltonianSampler):
             )
         )
         delta_new = phi_new - psi_new
-        probs_0 = control_func.inv_temp_cond_prob_func(0., delta_new)
-        probs_1 = control_func.inv_temp_cond_prob_func(1., delta_new)
-        return [pos_new, mom_new,
-                energies_new, phi_new, psi_new,
+        probs_0, probs_1 = control_func.inv_temp_cond_prob_0_1(delta_new)
+        return [pos_new, mom_new, energies_new, phi_new, psi_new,
                 probs_0, probs_1, accept]

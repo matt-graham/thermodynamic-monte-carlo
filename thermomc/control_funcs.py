@@ -16,6 +16,11 @@ class CircularControlFunction(object):
         u = tmp_ctrl_var / self.scale
         return (1. + tt.cos(np.pi * u)) / 2.
 
+    def inv_temp_cond_prob_0_1(self, delta):
+        prob_0 = tt.exp(delta / 2) / (2 * i0(delta / 2))
+        prob_1 = tt.exp(-delta / 2) / (2 * i0(delta / 2))
+        return prob_0, prob_1
+
     def inv_temp_cond_prob_func(self, inv_temp, delta):
         return tt.exp(-inv_temp * delta) / (
             2 * tt.exp(-delta / 2) * i0(delta / 2)
@@ -47,6 +52,15 @@ class ThresholdedCircularControlFunction(object):
             tt.switch(tt.ge(z, 1), 0., (1. + tt.cos(np.pi * z)) / 2.)
         )
 
+    def inv_temp_cond_prob_0_1(self, delta):
+        prob_0 = 1. / (2 * (
+            self.theta_1 * tt.exp(-delta) + 1. - self.theta_2 +
+            (self.theta_2 - self.theta_1) * tt.exp(-delta / 2) * i0(delta / 2)
+            )
+        )
+        prob_1 = tt.exp(-delta) * prob_0
+        return prob_0, prob_1
+
     def inv_temp_cond_prob_func(self, inv_temp, delta):
         return tt.exp(-inv_temp * delta) / (2 * (
             self.theta_1 * tt.exp(-delta) + 1. - self.theta_2 +
@@ -67,6 +81,11 @@ class SigmoidalControlFunction(object):
     def inv_temp_func(self, tmp_ctrl_var):
         u = tmp_ctrl_var / self.scale
         return tt.nnet.sigmoid(u)
+
+    def inv_temp_cond_prob_0_1(self, delta):
+        prob_0 = -delta / tt.expm1(-delta)
+        prob_1 = delta / tt.expm1(delta)
+        return prob_0, prob_1
 
     def inv_temp_cond_prob_func(self, inv_temp, delta):
         return -tt.exp(-inv_temp * delta) * delta / tt.expm1(-delta)
