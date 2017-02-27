@@ -66,8 +66,9 @@ class GibbsContinuousTemperingSampler(HamiltonianSampler):
     def sample_inv_temp(self, delta):
         """Sample inverse temperature from trunc. exponential conditional."""
         uni_rnd = self.srng.uniform(delta.shape)
-        return ((delta < 0) + tt.sgn(delta) *
-                tt.mod(-tt.log(uni_rnd) / abs(delta), 1.))
+        return tt.cast((delta < 0) + tt.sgn(delta) *
+                       tt.mod(-tt.log(uni_rnd) / abs(delta), 1.),
+                       th.config.floatX)
 
     def transition(self, pos, mom, inv_temp, energy, phi, psi, energy_func,
                    hmc_params):
