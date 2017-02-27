@@ -69,7 +69,7 @@ class SigmoidalControlFunction(object):
         return tt.nnet.sigmoid(u)
 
     def inv_temp_cond_prob_func(self, inv_temp, delta):
-        return tt.exp(-inv_temp * delta) * delta / (1. - tt.exp(-delta))
+        return -tt.exp(-inv_temp * delta) * delta / tt.expm1(-delta)
 
     def log_jacobian_term(self, tmp_ctrl_var):
         u = tmp_ctrl_var / self.scale
