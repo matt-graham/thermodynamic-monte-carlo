@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ Continuous temperature thermodynamic Monte Carlo algorithms. """
 
+import numpy as np
 import theano as th
 import theano.tensor as tt
 from thermomc.hmc import HamiltonianSampler
@@ -66,9 +67,15 @@ class GibbsContinuousTemperingSampler(HamiltonianSampler):
     def sample_inv_temp(self, delta):
         """Sample inverse temperature from trunc. exponential conditional."""
         uni_rnd = self.srng.uniform(delta.shape)
-        return tt.cast((delta < 0) + tt.sgn(delta) *
-                       tt.mod(-tt.log(uni_rnd) / abs(delta), 1.),
-                       th.config.floatX)
+        abs_delta = abs(delta)
+        # if delta ~ 0 to floating point precision, return uniform otherwise
+        # sample from truncated exponential with rate parameter delta
+        return tt.switch(
+            abs_delta < np.finfo(th.config.floatX).tiny, uni_rnd,
+            tt.cast((delta < 0) - tt.sgn(delta) *
+                    tt.log1p(tt.expm1(-abs_delta) * uni_rnd) / abs_delta,
+                    th.config.floatX)
+        )
 
     def transition(self, pos, mom, inv_temp, energy, phi, psi, energy_func,
                    hmc_params):
