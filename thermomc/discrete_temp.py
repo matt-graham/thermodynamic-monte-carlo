@@ -3,6 +3,7 @@
 
 import theano as th
 import theano.tensor as tt
+import theano.sandbox.rng_mrg as mrg_rand
 from thermomc.hmc import HamiltonianSampler
 
 
@@ -144,10 +145,15 @@ class SimulatedTemperingSampler(HamiltonianSampler):
             (1 - inv_temps[None, :]) * psi[:, None]
         )
         probs = tt.nnet.softmax(-energies_all + inv_temp_weights)
-        idx, updates = th.scan(
-            fn=lambda p: self.srng.choice(a=p.shape[0], p=p, size=[]),
-            sequences=probs
-        )
+        if self.srng isinstance(mrg_rand.MRG_RandomStreams):
+            idx, updates = self.srng.choice(
+                a=probs.shape[-1], size=1, replace=False, p=probs), {}
+        else:
+            idx, updates = th.scan(
+                fn=lambda p: self.srng.choice(
+                    a=p.shape[0], size=[], replace=False, p=p),
+                sequences=probs
+            )
         energy = energies_all[tt.arange(probs.shape[0]), idx]
         return [idx, energy, probs[:, 0], probs[:, -1]], updates
 
