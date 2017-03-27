@@ -83,12 +83,15 @@ class SigmoidalControlFunction(object):
         return tt.nnet.sigmoid(u)
 
     def inv_temp_cond_prob_0_1(self, delta):
-        prob_0 = -delta / tt.expm1(-delta)
-        prob_1 = delta / tt.expm1(delta)
+        prob_0 = tt.switch(tt.eq(delta, 0.), tt.ones_like(delta),
+                           -delta / tt.expm1(-delta))
+        prob_1 = tt.switch(tt.eq(delta, 0.), tt.ones_like(delta),
+                           delta / tt.expm1(delta))
         return prob_0, prob_1
 
     def inv_temp_cond_prob_func(self, inv_temp, delta):
-        return -tt.exp(-inv_temp * delta) * delta / tt.expm1(-delta)
+        return tt.switch(tt.eq(delta, 0.), tt.ones_like(delta),
+                         -tt.exp(-inv_temp * delta) * delta / tt.expm1(-delta))
 
     def log_jacobian_term(self, tmp_ctrl_var):
         u = tmp_ctrl_var / self.scale
