@@ -91,10 +91,10 @@ class GibbsContinuousTemperingSampler(HamiltonianSampler):
         delta_new = phi_new - psi_new
         inv_temp_new = self.sample_inv_temp(delta_new)
         energies_new = inv_temp_new * phi_new + (1 - inv_temp_new) * psi_new
-        probs_0 = tt.switch(delta_new == 0.,
+        probs_0 = tt.switch(tt.eq(delta_new,  0.),
                             tt.ones_like(delta_new),
                             -delta_new / tt.expm1(-delta_new))
-        probs_1 = tt.switch(delta_new == 0.,
+        probs_1 = tt.switch(tt.eq(delta_new, 0.),
                             tt.ones_like(delta_new),
                             delta_new / tt.expm1(delta_new))
         return [pos_new, mom_new, inv_temp_new,
