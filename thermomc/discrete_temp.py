@@ -145,7 +145,7 @@ class SimulatedTemperingSampler(HamiltonianSampler):
             (1 - inv_temps[None, :]) * psi[:, None]
         )
         probs = tt.nnet.softmax(-energies_all + inv_temp_weights)
-        if self.srng isinstance(mrg_rand.MRG_RandomStreams):
+        if isinstance(self.srng, mrg_rand.MRG_RandomStreams):
             idx, updates = self.srng.choice(
                 a=probs.shape[-1], size=1, replace=False, p=probs), {}
         else:
